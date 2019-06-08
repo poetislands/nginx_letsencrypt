@@ -1,0 +1,29 @@
+include /etc/nginx/conf.d/{{ nginx.url }}_upstream*;
+
+server {
+    listen {{ nginx.listen_ip }}:443 ssl default_server;
+
+{% if nginx_root_dir is defined %}
+    root {{ nginx_root_dir }};
+
+{% endif %}
+{% if nginx_hsts_header %}
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+{% endif %}
+    server_name {{ nginx.url }};
+{% if 'aliases' in nginx %}
+  {% for server_alias in nginx.aliases %}
+    server_name {{ server_alias }};
+  {% endfor %}
+{% endif %}
+    ssl on;
+    ssl_certificate /etc/letsencrypt/live/{{ nginx.url }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ nginx.url }}/privkey.pem;
+
+    ssl_trusted_certificate /etc/letsencrypt/live/{{ nginx.url }}/fullchain.pem;
+
+    keepalive_timeout 70;
+
+    include /etc/nginx/conf.d/{{ nginx.url }}_location*;
+}

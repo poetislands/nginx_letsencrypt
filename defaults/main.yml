@@ -1,0 +1,16 @@
+---
+nginx_default_dhparam: yes
+nginx_hsts_header: yes 
+nginx_ssl_cipers: "'ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384'"
+nginx_resolvers:
+  - "1.1.1.1"
+  - "1.0.0.1"
+
+letsencrypt_with_firewalld: no
+letsencrypt_with_ufw: no
+letsencrypt_rsa_key_size: 4096
+# Let's Encrypt certificate duplicate requests are rate limited to 5 per week.
+# As long as you don't throw away your certificates too often, this is not a problem.
+# Otherwise, you should use staging mode.
+# Set the letsencrypt_staging variable to no for hosts where you do not wish to use staging mode.
+letsencrypt_staging: yes

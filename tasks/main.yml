@@ -1,0 +1,194 @@
+---
+- name: Install epel-release
+  yum:
+    name: epel-release
+    state: present
+  when: ansible_os_family | lower == 'redhat'
+  become: true
+
+- name: Install nginx and certbot packages
+  yum:
+    name: ['nginx', 'certbot', 'python-certbot-nginx']
+    state: present
+  become: true
+  when: ansible_os_family | lower == 'redhat'
+
+- name: Install nginx and certbot packages
+  apt:
+    name: ['nginx', 'certbot', 'python-certbot-nginx']
+    state: present
+  become: true
+  when: ansible_os_family | lower == 'debian'
+
+- name: Template nginx main configuration
+  template:
+    src: "nginx.conf.j2"
+    dest: "/etc/nginx/nginx.conf"
+    owner: root
+    group: root
+    mode: 0644
+    validate: "/usr/sbin/nginx -t -c %s"
+  become: true
+  notify:
+  - Reload nginx
+
+- name: Set nginx sites location
+  set_fact:
+    nginx_sites_dir: "{{ (ansible_os_family == 'Debian') | ternary('sites-available','conf.d') }}"
+
+- name: Template nginx http configuration
+  template:
+    src: "http.conf.j2"
+    dest: "/etc/nginx/{{ nginx_sites_dir }}/{{ nginx.url }}_http.conf"
+    owner: root
+    group: root
+    mode: 0644
+  become: true
+  notify:
+  - Reload nginx
+
+- name: Enable http site
+  file:
+    state: link
+    src: /etc/nginx/sites-available/{{ nginx.url }}_http.conf
+    dest: /etc/nginx/sites-enabled/{{ nginx.url }}_http.conf
+  when: ansible_os_family | lower == 'debian'
+  become: true
+  notify:
+  - Restart nginx
+
+- name: Disable default site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  when: ansible_os_family | lower == 'debian'
+  become: true
+  notify:
+  - Restart nginx
+      
+- name: Enable and start nginx
+  service:
+    name: nginx
+    enabled: true
+    state: started
+  become: true
+
+- name: Open firewalld for http
+  firewalld:
+    service: "http"
+    permanent: true
+    immediate: true
+    state: enabled
+  become: true
+  when: letsencrypt_with_firewalld|bool
+
+- name: Open ufw for http
+  ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+  become: true
+  when: letsencrypt_with_ufw|bool
+
+- name: Disable Letsencrypt staging mode
+  set_fact:
+    letsencrypt_mode: ""
+  when: not letsencrypt_staging|bool
+
+- name: Enable Letsencrypt staging mode
+  set_fact:
+    letsencrypt_mode: "--staging "
+  when: letsencrypt_staging|bool
+
+- name: Generate domain parameter for certbot
+  set_fact:
+    letsencrypt_domain_params: "--domain {{ nginx.url }}"
+
+- name: Add domain parameters for aliases
+  set_fact:
+    letsencrypt_domain_params: "{{ letsencrypt_domain_params }} --domain {{ item }}"
+  loop: "{{ nginx.aliases }}"
+  when: nginx.aliases is defined
+
+- name: Ensure latest nginx config is active by flushing handlers
+  meta: flush_handlers
+
+- name: Run certbot to get certificates
+  command: "certbot --non-interactive --nginx --rsa-key-size {{ letsencrypt_rsa_key_size }} {{ letsencrypt_domain_params }} --agree-tos -m {{ letsencrypt_mail }} {{ letsencrypt_mode }}certonly"
+  args:
+    creates: "/etc/letsencrypt/live/{{ nginx.url }}/fullchain.pem"
+  become: true
+
+- name: Create directory to hold dhparam.pem
+  file:
+    path: /etc/nginx/ssl
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+  become: true
+
+- name: Generate dhparam.pem
+  openssl_dhparam:
+    path: /etc/nginx/ssl/dhparam.pem
+    size: 4096
+  become: true
+  when: not nginx_default_dhparam|bool
+
+- name: Copy dhparam.pem
+  copy:
+    src: dhparam.pem
+    dest: /etc/nginx/ssl/dhparam.pem
+    owner: root
+    group: root
+    mode: 0644
+  become: true
+  when: nginx_default_dhparam|bool
+  notify:
+  - Reload nginx
+
+- name: Template nginx https configuration
+  template:
+    src: "https.conf.j2"
+    dest: "/etc/nginx/{{ nginx_sites_dir }}/{{ nginx.url }}_https.conf"
+    owner: root
+    group: root
+    mode: 0644
+  become: true
+  notify:
+  - Reload nginx
+
+- name: Enable https site
+  file:
+    state: link
+    src: /etc/nginx/sites-available/{{ nginx.url }}_https.conf
+    dest: /etc/nginx/sites-enabled/{{ nginx.url }}_https.conf
+  when: ansible_os_family | lower == 'debian'
+  become: true
+  notify:
+  - Reload nginx
+      
+- name: Open firewalld for https
+  firewalld:
+    service: "https"
+    permanent: true
+    immediate: true
+    state: enabled
+  become: true
+  when: letsencrypt_with_firewalld|bool
+
+- name: Open ufw for https
+  ufw:
+    rule: allow
+    port: "443"
+    proto: tcp
+  become: true
+  when: letsencrypt_with_ufw|bool
+
+- name: Add Letsencrypt renewal cronjob
+  cron:
+    name: "Renew Letsencrypt certificates"
+    minute: "{{ 59 | random(seed=inventory_hostname) }}"
+    hour: "7,19"
+    job: "/usr/bin/certbot renew --quiet --post-hook 'systemctl reload nginx'"
+  become: true
